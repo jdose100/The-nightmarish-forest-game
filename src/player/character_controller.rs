@@ -1,420 +1,182 @@
-// import crates
-use avian3d::{math::*, prelude::*};
-use bevy::{ecs::query::Has, prelude::*};
-use educe::Educe;
+// import avian 3d
+use avian3d::math::AdjustPrecision;
 
-// create plugin
+// import bevy
+use bevy::prelude::*;
+
+// import bevy-tnua
+use bevy_tnua::prelude::*;
+use bevy_tnua::math::{AsF32, Float, Vector3};
+use bevy_tnua::control_helpers::{TnuaCrouchEnforcerPlugin, TnuaSimpleAirActionsCounter};
+use bevy_tnua_avian3d::*;
+
+// import this crate
+use crate::player::Player;
+
+/// plugins add character controller for player
 pub struct CharacterControllerPlugin;
 
 impl Plugin for CharacterControllerPlugin {
     fn build(&self, app: &mut App) {
-        // add MovementAction event
-        app.add_event::<MovementAction>();
+        // add plugins
+        app.add_plugins(TnuaAvian3dPlugin::new(FixedUpdate));
 
-        // add update systems
-        app.add_systems(Update, (
-            keyboard_input,
-            update_grounded,
-            apply_gravity,
-            movement,
-            apply_movement_damping
-        ).chain());
+        // this is Tnua's main plugin
+        app.add_plugins(TnuaControllerPlugin::new(FixedUpdate));
+        app.add_plugins(TnuaCrouchEnforcerPlugin::new(FixedUpdate));
 
-        // add PostProccesCollisions system
-        app.add_systems(
-            // Run collision handling after collision detection.
-            //
-            // NOTE: The collision implementation here is very basic and a bit buggy.
-            //       A collide-and-slide algorithm would likely work better.
-            PostProcessCollisions,
-            kinematic_controller_collision
+        // add systems
+        app.add_systems(Startup, Player::setup);
+        app.add_systems(PostUpdate,
+            Player::apply_mouse_controls.before(bevy::transform::TransformSystem::TransformPropagate)
         );
+        app.add_systems(FixedUpdate, apply_platformer_controls.in_set(TnuaUserControlsSystemSet));
     }
 }
 
-/// An event sent for a movement input action.
-#[derive(Event)]
-pub enum MovementAction {
-    Move(Vector2),
-    Jump
+/// player squat handling options
+#[derive(Component, Debug, PartialEq, Default)]
+#[allow(dead_code)]
+pub enum FallingThroughControlScheme {
+    #[default] SingleFall,
+    JumpThroughOnly,
+    WithoutHelper,
+    KeepFalling,
 }
 
-// create components
-/// A marker component indicating that an entity is using a character controller.
+/// character motion config
 #[derive(Component)]
-pub struct CharacterController;
+pub struct CharacterMotionConfig {
+    pub speed: Float, // speed in walk mode
+    pub run_speed: Float, // speed in run mode
+    pub crouch_speed: Float, // speed in cruch mode
 
-/// A marker component indicating that an entity is on the ground.
-#[derive(Component)]
-#[component(storage = "SparseSet")]
-pub struct Grounded;
+    pub crouch_height: Float, // growth while sitting
+    pub height: Float, // growth in normal condition
 
-/// The acceleration used for character movement.
-#[derive(Component)]
-pub struct MovementAcceleration(Scalar);
+    // tnua's data
+    pub walk: TnuaBuiltinWalk,
+    pub jump: TnuaBuiltinJump,
 
-/// The damping factor used for slowing down movement.
-#[derive(Component)]
-pub struct MovementDampingFactor(Scalar);
-
-/// The strength of a jump.
-#[derive(Component)]
-pub struct JumpImpulse(Scalar);
-
-/// The gravitational acceleration used for a character controller.
-#[derive(Component)]
-pub struct ControllerGravity(Vector);
-
-/// The maximum angle a slope can have for a character controller
-/// to be able to climb and jump. If the slope is steeper than this angle,
-/// the character will slide down.
-#[derive(Component)]
-pub struct MaxSlopeAngle(Scalar);
-
-// create bundles
-/// A bundle that contains components for character movement.
-#[derive(Bundle, Educe)]
-#[educe(Default)]
-pub struct MovementBundle {
-    #[educe(Default = MovementAcceleration(30.0))]
-    acceleration: MovementAcceleration,
-
-    #[educe(Default = MovementDampingFactor(0.9))]
-    damping: MovementDampingFactor,
-
-    #[educe(Default = JumpImpulse(7.0))]
-    jump_impulse: JumpImpulse,
-
-    #[educe(Default = MaxSlopeAngle(PI * 0.45))]
-    max_slope_angle: MaxSlopeAngle
+    // other data
+    pub actions_in_air: usize,
 }
 
-impl MovementBundle {
-    pub const fn new(
-        acceleration: Scalar,
-        damping: Scalar,
-        jump_impulse: Scalar,
-        max_slope_angle: Scalar
-    ) -> Self {
-        return Self {
-            acceleration: MovementAcceleration(acceleration),
-            damping: MovementDampingFactor(damping),
-            jump_impulse: JumpImpulse(jump_impulse),
-            max_slope_angle: MaxSlopeAngle(max_slope_angle)
-        };
-    }
-}
+// constants for character control
+struct MoveKeys { forward: KeyCode, back: KeyCode, left: KeyCode, right: KeyCode, jump: KeyCode }
+const CROUCH_KEYS: [KeyCode; 2] = [KeyCode::ControlLeft, KeyCode::ControlRight];
+const RUN_KEYS: [KeyCode; 2] = [KeyCode::ShiftLeft, KeyCode::ShiftRight];
+const MOVE_KEYS: MoveKeys = MoveKeys {
+    forward: KeyCode::KeyW,
+    back: KeyCode::KeyS,
+    left: KeyCode::KeyA,
+    right: KeyCode::KeyD,
+    jump: KeyCode::Space
+};
 
-/// A bundle that contains the components needed for a basic
-/// kinematic character controller.
-#[derive(Bundle)]
-pub struct CharacterControllerBundle {
-    character_controller: CharacterController,
-    rigid_body: RigidBody,
-    collider: Collider,
-    ground_caster: ShapeCaster,
-    gravity: ControllerGravity,
-    movement: MovementBundle,
-}
-
-impl CharacterControllerBundle {
-    pub fn new(collider: Collider, gravity: Vector) -> Self {
-        // create shape caster as a slighty smaller version of collider
-        let mut caster_shape = collider.clone();
-        caster_shape.set_scale(Vector::ONE * 0.99, 10);
-
-        return Self {
-            character_controller: CharacterController,
-            rigid_body: RigidBody::Kinematic,
-            collider,
-            ground_caster: ShapeCaster::new(
-                caster_shape, Vector::ZERO, Quaternion::default(), Dir3::NEG_Y,
-            ).with_max_distance(0.2),
-            gravity: ControllerGravity(gravity),
-            movement: MovementBundle::default()
-        };
-    }
-
-    pub fn with_movement(
-        mut self,
-        acceleration: Scalar,
-        damping: Scalar,
-        jump_impulse: Scalar,
-        max_slope_angle: Scalar
-    ) -> Self {
-        self.movement = MovementBundle::new(acceleration, damping, jump_impulse, max_slope_angle);
-        self
-    }
-}
-
-// systems
-/// Sends ['MovementAction'] events based on keyboard input
-fn keyboard_input(
-    mut movement_event_writer: EventWriter<MovementAction>,
-    keyboard_input: Res<ButtonInput<KeyCode>>
+/// exercising character control
+pub(crate) fn apply_platformer_controls(
+   keyboard: Res<ButtonInput<KeyCode>>,
+   mut query: Query<(
+       &CharacterMotionConfig,
+       &mut TnuaController,
+       &mut TnuaSimpleAirActionsCounter,
+       &Player
+   )>
 ) {
-    // we get the direction
-    let up = keyboard_input.pressed(KeyCode::KeyW) as i8;
-    let down = keyboard_input.pressed(KeyCode::KeyS) as i8;
-    let right = keyboard_input.pressed(KeyCode::KeyD) as i8;
-    let left = keyboard_input.pressed(KeyCode::KeyA) as i8;
+    for (
+        config, mut controller,
+        mut air_actions_counter, player_data
+    ) in query.iter_mut() {
+        let mut direction = Vector3::ZERO;
 
-    // get vec2 direction
-    let horizontal = (right - left) as Scalar;
-    let vertical = (up - down) as Scalar;
-    let direction = Vector2::new(horizontal, vertical).clamp_length_max(1.0);
+        // get direction from keyboadrd
+        if keyboard.pressed(MOVE_KEYS.forward) {
+            direction -= Vector3::Z;
+        }
 
-    // if directin != (0, 0) then send character move
-    if direction != Vector2::ZERO {
-        movement_event_writer.send(MovementAction::Move(direction));
-    }
+        if keyboard.pressed(MOVE_KEYS.back) {
+            direction += Vector3::Z;
+        }
 
-    // if space just pressed then send character jump
-    if keyboard_input.just_pressed(KeyCode::Space) {
-        movement_event_writer.send(MovementAction::Jump);
-    }
-}
+        if keyboard.pressed(MOVE_KEYS.left) {
+            direction -= Vector3::X;
+        }
 
-/// update the ['Grounded'] status for character controllers
-fn update_grounded(
-    mut commands: Commands,
-    mut query: Query<
-        (Entity, &ShapeHits, &Rotation, Option<&MaxSlopeAngle>),
-        With<CharacterController>
-    >
-) {
-    for (entity, hits, rotation, max_slope_angle) in &mut query {    
-        // The character is grounded if the shape caster has a hit with a normal
-        // that isn't too steep.
-        let is_grounded = hits.iter().any(|hit| {
-            if let Some(angle) = max_slope_angle {
-                (rotation * -hit.normal2).angle_between(Vector::Y).abs() <= angle.0
-            } else { return true; }
+        if keyboard.pressed(MOVE_KEYS.right) {
+            direction += Vector3::X;
+        }
+
+        // calculate direction
+        direction = direction.clamp_length_max(1.0);
+        direction = bevy::prelude::Transform::default()
+                .looking_to(player_data.forward.f32(), Vec3::Y)
+                .transform_point(direction.f32())
+                .adjust_precision();
+
+        // get active keys
+        let crouch = keyboard.any_pressed(CROUCH_KEYS);
+        let jump = keyboard.pressed(MOVE_KEYS.jump);
+        let run = keyboard.any_pressed(RUN_KEYS);
+
+        // This needs to be called once per frame. It lets the air actions counter know about the
+        // air status of the character. Specifically:
+        // * Is it grounded or is it midair?
+        // * Did any air action just start?
+        // * Did any air action just finished?
+        // * Is any air action currently ongoing?
+        air_actions_counter.update(controller.as_mut());
+
+
+        // get player speed
+        let speed =
+            if crouch {
+                config.crouch_speed
+            } else if run {
+                config.run_speed
+            } else {
+                config.speed
+            };
+
+        // get player height
+        let height = if crouch { config.crouch_height } else { config.height };
+
+        // The basis is Tnua's most fundamental control command, governing over the character's
+        // regular movement. The basis (and, to some extent, the actions as well) contains both
+        // configuration - which in this case we copy over from `config.walk` - and controls like
+        // `desired_velocity` or `desired_forward` which we compute here based on the current
+        // frame's input.
+        controller.basis(TnuaBuiltinWalk {
+            desired_velocity: direction * speed,
+            float_height: height,
+
+            // With shooters, we want the character model to follow the camera.
+            desired_forward: Dir3::new(player_data.forward.f32()).ok(),
+            ..config.walk.clone()
         });
 
-        if is_grounded {
-            commands.entity(entity).insert(Grounded);
-        } else {
-            commands.entity(entity).remove::<Grounded>();
-        }
-    }
-}
-
-/// Responds to [`MovementAction`] events and moves character controllers accordingly.
-fn movement(
-    time: Res<Time>,
-    mut movement_event_reader: EventReader<MovementAction>,
-    mut controllers: Query<(
-        &MovementAcceleration,
-        &JumpImpulse,
-        &mut LinearVelocity,
-        Has<Grounded>
-    )>
-) {
-    // Precision is adjusted so that the example works with
-    // both the `f32` and `f64` features. Otherwise you don't need this.
-    let delta_time = time.delta_secs_f64().adjust_precision();
-
-    for event in movement_event_reader.read() {
-        for (
-            movement_acceleration, jump_impulse,
-            mut linear_velocity, is_grounded
-        ) in &mut controllers {
-            match event {
-                MovementAction::Move(direction) => {
-                    linear_velocity.x += direction.x * movement_acceleration.0 * delta_time;
-                    linear_velocity.z -= direction.y * movement_acceleration.0 * delta_time;
-                }
-
-                MovementAction::Jump => {
-                    if is_grounded {
-                        linear_velocity.y = jump_impulse.0;
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Applies [`ControllerGravity`] to character controllers.
-fn apply_gravity(
-    time: Res<Time>,
-    mut controllers: Query<(&ControllerGravity, &mut LinearVelocity)>
-) {
-    // Precision is adjusted so that the example works with
-    // both the `f32` and `f64` features. Otherwise you don't need this.
-    let delta_time = time.delta_secs_f64().adjust_precision();
-
-    for (gravity, mut linear_velocity) in &mut controllers {
-        linear_velocity.0 += gravity.0 * delta_time;
-    }
-}
-
-/// Slows down movement in the XZ plane.
-fn apply_movement_damping(mut query: Query<(&MovementDampingFactor, &mut LinearVelocity)>) {
-    for (damping_factor, mut linear_velocity) in &mut query {
-        // We could use `LinearDamping`, but we don't want to dampen movement along the Y axis
-        linear_velocity.x *= damping_factor.0;
-        linear_velocity.z *= damping_factor.0;
-    }
-}
-
-/// Kinematic bodies do not get pushed by collisions by default,
-/// so it needs to be done manually.
-///
-/// This system handles collision response for kinematic character controllers
-/// by pushing them along their contact normals by the current penetration depth,
-/// and applying velocity corrections in order to snap to slopes, slide along walls,
-/// and predict collisions using speculative contacts.
-#[allow(clippy::type_complexity)]
-fn kinematic_controller_collision(
-    collisions: Res<Collisions>,
-    bodies: Query<&RigidBody>,
-    collider_parents: Query<&ColliderParent, Without<Sensor>>,
-    mut character_controllers: Query<
-        (&mut Position, &mut LinearVelocity, Option<&MaxSlopeAngle>),
-        (With<RigidBody>, With<CharacterController>)
-    >,
-    time: Res<Time>
-) {
-    // Iterate through collisions and move the kinematic body to resolve penetration
-    for contacts in collisions.iter() {
-        // Get the rigid body entities of the colliders (colliders could be children)
-        let Ok([collider_parent1, collider_parent2]) =
-            collider_parents.get_many([contacts.entity1, contacts.entity2])
-        else {
-            continue;
-        };
-
-        // Get the body of the character controller and whether it is the first
-        // or second entity in the collision.
-        let is_first: bool;
-
-        let character_rb: RigidBody;
-        let is_other_dynamic: bool;
-
-        let (mut position, mut linear_velocity, max_slope_angle) =
-            if let Ok(character) = character_controllers.get_mut(collider_parent1.get()) {
-                is_first = true;
-                character_rb = *bodies.get(collider_parent1.get()).unwrap();
-                is_other_dynamic = bodies
-                    .get(collider_parent1.get())
-                    .is_ok_and(|rb| rb.is_dynamic());
-                character
-            } else if let Ok(character) = character_controllers.get_mut(collider_parent2.get()) {
-                is_first = false;
-                character_rb = *bodies.get(collider_parent2.get()).unwrap();
-                is_other_dynamic = bodies
-                    .get(collider_parent2.get())
-                    .is_ok_and(|rb| rb.is_dynamic());
-                character
-                
-            } else {
-                continue;
-            };
-
-
-        if !character_rb.is_kinematic() {
-            continue;
-        }
-
-        // Iterate through contact manifolds and their contacts.
-        // Each contact in a single manifold shares the same contact normal.
-        for manifold in contacts.manifolds.iter() {
-            let normal = if is_first {
-                -manifold.normal1
-            } else {
-                manifold.normal1
-            };
-
-            let mut deepest_penetration: Scalar = Scalar::MIN;
-            // Solve each penetrating contact in the manifold.
-            for contact in manifold.contacts.iter() {
-                if contact.penetration > 0.0 {
-                    position.0 += normal * contact.penetration;
-                }
-                deepest_penetration = deepest_penetration.max(contact.penetration);
-            }
-
-            // For now, this system only handles velocity corrections for collisions against static geometry.
-            if is_other_dynamic {
-                continue;
-            }
-
-            // Determine if the slope is climbable or if it's too steep to walk on.
-            let slope_angle = normal.angle_between(Vector::Y);
-            let climbable = max_slope_angle.is_some_and(|angle| slope_angle.abs() <= angle.0);
-
-            if deepest_penetration > 0.0 {
-                // If the slope is climbable, snap the velocity so that the character
-                // up and down the surface smoothly.
-                if climbable {
-                    // If the slope is climbable, snap the velocity so that the character
-                    // up and down the surface smoothly.
-                    let normal_direction_xz =
-                        normal.reject_from_normalized(Vector::Y).normalize_or_zero();
-
-                    // The movement speed along the direction above.
-                    let linear_velocity_xz = linear_velocity.dot(normal_direction_xz);
-
-                    // Snap the Y speed based on the speed at which the character is moving
-                    // up or down the slope, and how steep the slope is.
-                    //
-                    // A 2D visualization of the slope, the contact normal, and the velocity components:
-                    //
-                    //             ╱
-                    //     normal ╱
-                    // *         ╱
-                    // │   *    ╱   velocity_x
-                    // │       * - - - - - -
-                    // │           *       | velocity_y
-                    // │               *   |
-                    // *───────────────────*
-
-                    let max_y_speed = -linear_velocity_xz * slope_angle.tan();
-                    linear_velocity.y = linear_velocity.y.max(max_y_speed);
-                } else {
-                    // The character is intersecting an unclimbable object, like a wall.
-                    // We want the character to slide along the surface, similarly to
-                    // a collide-and-slide algorithm.
-
-                    // Don't apply an impulse if the character is moving away from the surface.
-                    if linear_velocity.dot(normal) > 0.0 {
-                        continue;
-                    }
-
-                    // Slide along the surface, rejecting the velocity along the contact normal.
-                    let impulse = linear_velocity.reject_from_normalized(normal);
-                    linear_velocity.0 = impulse;
-                }
-            } else {
-                // The character is not yet intersecting the other object,
-                // but the narrow phase detected a speculative collision.
+        if jump && !crouch {
+            controller.action(TnuaBuiltinJump {
+                // Jumping, like crouching, is an action that we either feed or don't. However,
+                // because it can be used in midair, we want to set its `allow_in_air`. The air
+                // counter helps us with that.
                 //
-                // We need to push back the part of the velocity
-                // that would cause penetration within the next frame.
-
-                let normal_speed = linear_velocity.dot(normal);
-                // Don't apply an impulse if the character is moving away from the surface.
-                if normal_speed > 0.0 {
-                    continue;
-                }
-
-                // Compute the impulse to apply.
-                let impulse_magnituide =
-                    normal_speed - (deepest_penetration / time.delta_secs_f64().adjust_precision());
-                let mut impulse = impulse_magnituide * normal;
-
-                // Apply the impulse differently depending on the slope angle.
-                if climbable {
-                    // Avoid sliding down slopes.
-                    linear_velocity.y -= impulse.y.min(0.0);
-                } else {
-                    // Avoid climbing up walls.
-                    impulse.y = impulse.y.max(0.0);
-                    linear_velocity.0 -= impulse;
-                }
-            }
+                // The air actions counter is used to decide if the action is allowed midair by
+                // determining how many actions were performed since the last time the character
+                // was considered "grounded" - including the first jump (if it was done from the
+                // ground) or the initiation of a free fall.
+                //
+                // `air_count_for` needs the name of the action to be performed (in this case
+                // `TnuaBuiltinJump::NAME`) because if the player is still holding the jump button,
+                // we want it to be considered as the same air action number. So, if the player
+                // performs an air jump, before the air jump `air_count_for` will return 1 for any
+                // action, but after it it'll return 1 only for `TnuaBuiltinJump::NAME`
+                // (maintaining the jump) and 2 for any other action. Of course, if the player
+                // releases the button and presses it again it'll return 2.
+                allow_in_air:
+                    air_actions_counter.air_count_for(TnuaBuiltinJump::NAME) <= config.actions_in_air,
+                ..config.jump.clone()
+            });
         }
     }
 }

@@ -1,95 +1,129 @@
-use bevy::{input::mouse::AccumulatedMouseMotion, prelude::*};
-use std::f32::consts::FRAC_PI_2;
+// import crates
+use bevy::{input::mouse::MouseMotion, prelude::*};
+use avian3d::{math::{AdjustPrecision, Quaternion, FRAC_PI_2}, prelude::*};
+use bevy_tnua::control_helpers::{TnuaCrouchEnforcer, TnuaSimpleAirActionsCounter, TnuaSimpleFallThroughPlatformsHelper};
+use bevy_tnua::math::{float_consts::FRAC_PI_4, Float, Vector3};
+use bevy_tnua::{prelude::*, TnuaGhostSensor, TnuaToggle};
+use bevy_tnua_avian3d::TnuaAvian3dSensorShape;
+use autodefault::autodefault;
+use educe::Educe;
 
 // character controller for player
-pub mod character_controller;
+pub(crate) mod character_controller;
+
+// import character controller
+use self::character_controller::CharacterMotionConfig;
+
 
 #[derive(Component, Debug)]
 pub struct PlayerComponent;
 
-#[derive(Component, Debug)]
+/// struct with player data
+#[derive(Component, Debug, Educe)]
 #[require(Transform)]
+#[educe(Default)]
 pub struct Player {
-    front_vec: Vec3 // vector for correct player moving
+    #[educe(Default = Vec3::NEG_Z)]
+    pub(crate) forward: Vec3,
+
+    #[educe(Default = 0.0)]
+    pub(crate) pitch_angle: Float
 }
 
 impl Player {
     /// create player system
-    pub fn new(mut commands: Commands) {
+    #[autodefault(except(CharacterMotionConfig))]
+    pub(crate) fn setup(
+        mut commands: Commands,
+        mut meshes: ResMut<Assets<Mesh>>,
+        mut materials: ResMut<Assets<StandardMaterial>>
+    ) {
         // create player struct
-        let player = Player {
-            front_vec: Vec3::ONE
+        let player = Player::default();
+
+        // create player motion config
+        let motion_config = CharacterMotionConfig {
+            // speeds
+            speed: 5.0,
+            run_speed: 7.5,
+            crouch_speed: 2.5,
+
+            // height's
+            height: 1.2,
+            crouch_height: 0.8,
+
+            // tnua data
+            walk: TnuaBuiltinWalk {
+                float_height: 1.2,
+                max_slope: FRAC_PI_4 * 4.0,
+                turning_angvel: Float::INFINITY
+            },
+            jump: TnuaBuiltinJump { height: 3.0 },
+
+            // other data
+            actions_in_air: 1,
         };
 
+        // player size const's
+        const RADIUS: f32 = 0.5;
+        const LENGHT: f32 = 1.0;
+
         // add player With<PlayerComponent>
-        commands.spawn((
-            PlayerComponent, player,
-            Transform::default()
-        ));
+        commands.spawn(PlayerComponent)
+            // The character entity must be configured as a dynamic rigid body of the physics backend.
+            .insert(RigidBody::Dynamic)
+            .insert(Collider::capsule(RADIUS, LENGHT))
+            .insert(Transform::from_xyz(0.0, 4.0, 0.0))
+            .insert(Mesh3d(meshes.add(Capsule3d::new(RADIUS, LENGHT))))
+            .insert(MeshMaterial3d(materials.add(Color::srgb(0.01, 0.87, 0.4))))
+
+            // `TnuaController` is Tnua's main interface with the user code
+            .insert(TnuaController::default())
+            .insert(motion_config)
+            
+            // add player data
+            .insert(player)
+
+            // An entity's Tnua behavior can be toggled individually with this component, if inserted.
+            .insert(TnuaToggle::default())        
+
+            // let layers = [LayerNames::Default, LayerNames::Player];
+            .insert(TnuaCrouchEnforcer::new(0.5 * Vector3::Y, |cmd| {
+                cmd.insert(TnuaAvian3dSensorShape(Collider::cylinder(0.5, 0.0)));
+            }))
+
+            // The ghost sensor is used for detecting ghost platforms - platforms configured in the physics
+            // backend to not contact with the character (or detect the contact but not apply physical
+            // forces based on it) and marked with the `TnuaGhostPlatform` component. These can then be
+            // used as one-way platforms.
+            .insert(TnuaGhostSensor::default())
+
+            // This helper is used to operate the ghost sensor and ghost platforms and implement
+            // fall-through behavior where the player can intentionally fall through a one-way platform.
+            .insert(TnuaSimpleFallThroughPlatformsHelper::default())
+
+            // This helper keeps track of air actions like jumps or air dashes.
+            .insert(TnuaSimpleAirActionsCounter::default());
     }
 
-    /// update player system
-    pub fn update(
-        player_data: Single<(&mut Transform, &mut Player), With<PlayerComponent>>,
-        keyboard_input: Res<ButtonInput<KeyCode>>,
-        accmulated_mouse_input: Res<AccumulatedMouseMotion>,
-        time: Res<Time>
+    /// rotate player with mouse input
+    pub(crate) fn apply_mouse_controls(
+        mut mouse_motion: EventReader<MouseMotion>,
+        player_character_query: Single<&mut Player, (With<PlayerComponent>, Without<Camera>)>,
     ) {
-        let (mut transform, mut player): (Mut<Transform>, Mut<Player>) = player_data.into_inner();
+        // get total delta
+        let total_delta: Vec2 = mouse_motion.read().map(|event| event.delta).sum();
+        let mut player_data = player_character_query.into_inner();
 
-        // rotate player
-        const CAMERA_SENSITIVITY: Vec2 = Vec2::new(0.003, 0.002);
-        let delta: Vec2 = accmulated_mouse_input.delta;
+        // calculate yaw and update forward
+        let yaw = Quaternion::from_rotation_y(-0.01 * total_delta.x.adjust_precision());
+        player_data.forward = yaw.mul_vec3(player_data.forward);
 
-        if delta != Vec2::ZERO {
-            // Note that we are not multiplying by delta_time here.
-            // The reason is that for mouse movement, we already get the full movement that happened since the last frame.
-            // This means that if we multiply by delta_time, we will get a smaller rotation than intended by the user.
-            // This situation is reversed when reading e.g. analog input from a gamepad however, where the same rules
-            // as for keyboard input apply. Such an input should be multiplied by delta_time to get the intended rotation
-            // independent of the framerate.
-            let delta_yaw = -delta.x * CAMERA_SENSITIVITY.x;
-            let delta_pitch = -delta.y * CAMERA_SENSITIVITY.y;
-
-            let (yaw, pitch, roll): (f32, f32, f32) = transform.rotation.to_euler(EulerRot::YXZ);
-            let yaw = yaw + delta_yaw;
-            
-            // If the pitch was ±¹⁄₂ π, the camera would look straight up or down.
-            // When the user wants to move the camera back to the horizon, which way should the camera face?
-            // The camera has no way of knowing what direction was "forward" before landing in that extreme position,
-            // so the direction picked will for all intents and purposes be arbitrary.
-            // Another issue is that for mathematical reasons, the yaw will effectively be flipped when the pitch is at the extremes.
-            // To not run into these issues, we clamp the pitch to a safe range.
-            const PITCH_LIMIT: f32 = FRAC_PI_2 - 0.01;
-            let pitch = (pitch + delta_pitch).clamp(-PITCH_LIMIT, PITCH_LIMIT);
-
-            transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
-
-            player.front_vec = Vec3::new(
-                yaw.to_radians().cos() * pitch.to_radians().cos(),
-                pitch.to_radians().sin(),
-                yaw.to_radians().sin() * pitch.to_radians().cos()
-            );
-        }
-
-        // move player if keys pressed
-        const UP_VECTOR: Vec3 = Vec3::new(0.0, 1.0, 0.0);
-
-        if keyboard_input.pressed(KeyCode::KeyW) {
-            transform.translation -= player.front_vec * time.delta_secs_f64() as f32;
-        }
-        
-        if keyboard_input.pressed(KeyCode::KeyS) {
-            transform.translation += player.front_vec * time.delta_secs_f64() as f32;
-        }
-
-        if keyboard_input.pressed(KeyCode::KeyD) {
-            transform.translation -= (player.front_vec.cross(UP_VECTOR) * time.delta_secs_f64() as f32).normalize();
-        }
-
-        if keyboard_input.pressed(KeyCode::KeyA) {
-            transform.translation += (player.front_vec.cross(UP_VECTOR) * time.delta_secs_f64() as f32).normalize();
-        }        
+        // calculate pitch and update pithch_angle
+        let pitch = 0.005 * total_delta.y.adjust_precision();
+        player_data.pitch_angle = (
+            player_data.pitch_angle + pitch
+        ).clamp(-FRAC_PI_2, FRAC_PI_2);
     }
 }
 

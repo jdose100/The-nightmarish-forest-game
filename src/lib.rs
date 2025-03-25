@@ -8,14 +8,16 @@ use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
 
 // add modules
-pub mod player;
-pub mod systems;
+pub(crate) mod player;
+pub(crate) mod systems;
+pub(crate) mod camera;
 
 
 // import this crate
-use crate::systems::{setup, camera_update};
+use crate::systems::setup;
 use crate::player::Player;
 use crate::player::character_controller::CharacterControllerPlugin;
+use crate::camera::CameraComponent;
 
 
 // add game plugin
@@ -24,23 +26,24 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         // add dev plugins
-        #[cfg(debug_assertions)]
-        app.add_plugins(WorldInspectorPlugin::new());
+        if cfg!(debug_assertions) {
+            app.add_plugins(WorldInspectorPlugin::new());
+            app.add_plugins(PhysicsDebugPlugin::new(FixedUpdate));
+        }
 
         // add plugins
-        app.add_plugins((
-                PhysicsPlugins::default(),
-                CharacterControllerPlugin
-        ));
+        app.add_plugins(PhysicsPlugins::new(FixedUpdate));        
+        app.add_plugins(CharacterControllerPlugin);
 
         // add resources
 
         // add events
 
         // add systems
-        app.add_systems(Startup, (crate::setup));
-        // app.add_systems(Update, camera_update);
-        // app.add_systems(Update, (crate::camera_update, Player::update).chain());
+        app.add_systems(Startup, crate::setup);
+        app.add_systems(Update,
+            CameraComponent::update_with_plr.before(Player::apply_mouse_controls)
+        );
     }
 }
 
