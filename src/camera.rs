@@ -1,25 +1,23 @@
+//! Controll camera systems
+
 // import crates
 use bevy::prelude::*;
-use bevy_tnua::math::AsF32;
 
-// import this crate
-use crate::player::{PlayerComponent, Player};
-
-// create camera component
+/// main camera in game
 #[derive(Component)]
 #[require(Transform, Camera3d)]
 pub struct CameraComponent {}
 
-impl CameraComponent {
-    /// create a new camera component
-    #[allow(dead_code)]
-    pub(crate) fn new() -> Self {
-        return Self {};
-    }
+pub mod camera_systems {
+    //! implementation of camera systems
+    // import crates
+    use bevy::prelude::*;
+    use bevy_tnua::math::AsF32;
+    use crate::player::PlayerComponent;
 
-    /// update camera transform with player
-    pub(crate) fn update_with_plr(        
-        player_character_query: Single<(&GlobalTransform, &Player), (With<PlayerComponent>, Without<Camera>)>,
+    /// Update camera transform with player
+    pub fn update_with_plr(        
+        player_character_query: Single<(&GlobalTransform, &PlayerComponent), (With<PlayerComponent>, Without<Camera>)>,
         mut camera_query: Query<&mut Transform, (With<Camera>, Without<PlayerComponent>)>
     ) {
         let (player_transform, player_data) = player_character_query.into_inner();

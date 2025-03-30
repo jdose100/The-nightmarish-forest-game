@@ -1,45 +1,63 @@
+//! In this module located a player logic
+//! and structrues
+
 // import crates
-use bevy::{input::mouse::MouseMotion, prelude::*};
-use avian3d::{math::{AdjustPrecision, Quaternion, FRAC_PI_2}, prelude::*};
-use bevy_tnua::control_helpers::{TnuaCrouchEnforcer, TnuaSimpleAirActionsCounter, TnuaSimpleFallThroughPlatformsHelper};
-use bevy_tnua::math::{float_consts::FRAC_PI_4, Float, Vector3};
-use bevy_tnua::{prelude::*, TnuaGhostSensor, TnuaToggle};
-use bevy_tnua_avian3d::TnuaAvian3dSensorShape;
-use autodefault::autodefault;
+use bevy::prelude::*;
+use bevy_tnua::math::Float;
 use educe::Educe;
 
 // character controller for player
 pub(crate) mod character_controller;
 
-// import character controller
-use self::character_controller::CharacterMotionConfig;
 
-
-#[derive(Component, Debug)]
-pub struct PlayerComponent;
-
-/// struct with player data
+/// Struct of player data.
+/// There can only be 1 player!
 #[derive(Component, Debug, Educe)]
 #[require(Transform)]
 #[educe(Default)]
-pub struct Player {
-    #[educe(Default = Vec3::NEG_Z)]
-    pub(crate) forward: Vec3,
+pub struct PlayerComponent {
+    #[educe(Default = Vec3::NEG_Z)] /// forward look up of player
+    pub forward: Vec3,
 
-    #[educe(Default = 0.0)]
-    pub(crate) pitch_angle: Float
+    #[educe(Default = 0.0)] /// player's pitch angle
+    pub pitch_angle: Float,
+
+    #[educe(Default = 0.0)] /// player's fear points
+    pub fear: f32,
 }
 
-impl Player {
-    /// create player system
+pub mod player_systems {
+    //! implementation of player systems
+    // import crates
+    use bevy::{input::mouse::MouseMotion, prelude::*};
+    use avian3d::{math::{AdjustPrecision, Quaternion, FRAC_PI_2}, prelude::*};
+    use autodefault::autodefault;
+
+    // import tnua
+    use bevy_tnua::control_helpers::TnuaSimpleAirActionsCounter;
+    use bevy_tnua::math::{float_consts::FRAC_PI_4, Float};
+    use bevy_tnua::{prelude::*, TnuaToggle};
+    use bevy_tnua_avian3d::TnuaAvian3dSensorShape;
+
+    // import character motion config and player component
+    use super::character_controller::CharacterMotionConfig;
+    use super::PlayerComponent;
+
+    /// Create player
     #[autodefault(except(CharacterMotionConfig))]
-    pub(crate) fn setup(
+    pub fn setup(
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
-        mut materials: ResMut<Assets<StandardMaterial>>
+        mut materials: ResMut<Assets<StandardMaterial>>,
+        have_player: Query<Option<&PlayerComponent>>
     ) {
+        // if the player already exists, then exit
+        if let Ok(_) = have_player.get_single() {
+            return;
+        }
+
         // create player struct
-        let player = Player::default();
+        let player = PlayerComponent::default();
 
         // create player motion config
         let motion_config = CharacterMotionConfig {
@@ -49,8 +67,8 @@ impl Player {
             crouch_speed: 2.5,
 
             // height's
-            height: 1.2,
-            crouch_height: 0.8,
+            height: 0.3, // 1.2,
+            crouch_height: 0.01, // 0.8,
 
             // tnua data
             walk: TnuaBuiltinWalk {
@@ -58,18 +76,18 @@ impl Player {
                 max_slope: FRAC_PI_4 * 4.0,
                 turning_angvel: Float::INFINITY
             },
-            jump: TnuaBuiltinJump { height: 3.0 },
-
-            // other data
-            actions_in_air: 1,
+            jump: TnuaBuiltinJump {
+                allow_in_air: false,
+                height: 2.0
+            },
         };
 
         // player size const's
-        const RADIUS: f32 = 0.5;
-        const LENGHT: f32 = 1.0;
+        const RADIUS: f32 = 0.49;
+        const LENGHT: f32 = 1.1;
 
         // add player With<PlayerComponent>
-        commands.spawn(PlayerComponent)
+        commands.spawn(player)
             // The character entity must be configured as a dynamic rigid body of the physics backend.
             .insert(RigidBody::Dynamic)
             .insert(Collider::capsule(RADIUS, LENGHT))
@@ -80,36 +98,22 @@ impl Player {
             // `TnuaController` is Tnua's main interface with the user code
             .insert(TnuaController::default())
             .insert(motion_config)
-            
-            // add player data
-            .insert(player)
 
             // An entity's Tnua behavior can be toggled individually with this component, if inserted.
-            .insert(TnuaToggle::default())        
+            .insert(TnuaToggle::default())
+            .insert(TnuaAvian3dSensorShape(Collider::capsule(RADIUS, LENGHT)))
 
-            // let layers = [LayerNames::Default, LayerNames::Player];
-            .insert(TnuaCrouchEnforcer::new(0.5 * Vector3::Y, |cmd| {
-                cmd.insert(TnuaAvian3dSensorShape(Collider::cylinder(0.5, 0.0)));
-            }))
-
-            // The ghost sensor is used for detecting ghost platforms - platforms configured in the physics
-            // backend to not contact with the character (or detect the contact but not apply physical
-            // forces based on it) and marked with the `TnuaGhostPlatform` component. These can then be
-            // used as one-way platforms.
-            .insert(TnuaGhostSensor::default())
-
-            // This helper is used to operate the ghost sensor and ghost platforms and implement
-            // fall-through behavior where the player can intentionally fall through a one-way platform.
-            .insert(TnuaSimpleFallThroughPlatformsHelper::default())
+            // lock axes
+            .insert(LockedAxes::new().lock_rotation_x().lock_rotation_z())
 
             // This helper keeps track of air actions like jumps or air dashes.
             .insert(TnuaSimpleAirActionsCounter::default());
     }
 
-    /// rotate player with mouse input
-    pub(crate) fn apply_mouse_controls(
+    /// Rotate player with mouse input
+    pub fn apply_mouse_controls(
         mut mouse_motion: EventReader<MouseMotion>,
-        player_character_query: Single<&mut Player, (With<PlayerComponent>, Without<Camera>)>,
+        player_character_query: Single<&mut PlayerComponent, (With<PlayerComponent>, Without<Camera>)>,
     ) {
         // get total delta
         let total_delta: Vec2 = mouse_motion.read().map(|event| event.delta).sum();
@@ -124,6 +128,26 @@ impl Player {
         player_data.pitch_angle = (
             player_data.pitch_angle + pitch
         ).clamp(-FRAC_PI_2, FRAC_PI_2);
+    }
+
+    use crate::components::SphereOfTear;
+    pub fn update_fear(
+        player: Single<(&Transform, &mut PlayerComponent)>,
+        query: Query<Option<(&Transform, &SphereOfTear)>>
+    ) {
+        let mut player = player.into_inner();
+
+        for sphere in query.iter() {
+            match sphere {
+                None => continue,
+                Some(sphere) => {
+                    if sphere.1.point_in_sphere(&sphere.0.translation, &player.0.translation) {
+                        player.1.fear += 1.0;
+                        info!("Player in sphere! Fear points: {}", player.1.fear);
+                    }
+                }
+            }
+        }
     }
 }
 

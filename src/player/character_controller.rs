@@ -1,3 +1,5 @@
+//! Character controller systems and plugin for player
+
 // import avian 3d
 use avian3d::math::AdjustPrecision;
 
@@ -11,9 +13,10 @@ use bevy_tnua::control_helpers::{TnuaCrouchEnforcerPlugin, TnuaSimpleAirActionsC
 use bevy_tnua_avian3d::*;
 
 // import this crate
-use crate::player::Player;
+use super::PlayerComponent;
+use super::player_systems;
 
-/// plugins add character controller for player
+/// Plugins add character controller for player
 pub struct CharacterControllerPlugin;
 
 impl Plugin for CharacterControllerPlugin {
@@ -26,44 +29,42 @@ impl Plugin for CharacterControllerPlugin {
         app.add_plugins(TnuaCrouchEnforcerPlugin::new(FixedUpdate));
 
         // add systems
-        app.add_systems(Startup, Player::setup);
+        app.add_systems(Startup, player_systems::setup);
         app.add_systems(PostUpdate,
-            Player::apply_mouse_controls.before(bevy::transform::TransformSystem::TransformPropagate)
+            player_systems::apply_mouse_controls.before(bevy::transform::TransformSystem::TransformPropagate)
         );
         app.add_systems(FixedUpdate, apply_platformer_controls.in_set(TnuaUserControlsSystemSet));
     }
 }
 
-/// player squat handling options
-#[derive(Component, Debug, PartialEq, Default)]
-#[allow(dead_code)]
-pub enum FallingThroughControlScheme {
-    #[default] SingleFall,
-    JumpThroughOnly,
-    WithoutHelper,
-    KeepFalling,
-}
-
-/// character motion config
+/// Character motion config
 #[derive(Component)]
 pub struct CharacterMotionConfig {
-    pub speed: Float, // speed in walk mode
-    pub run_speed: Float, // speed in run mode
-    pub crouch_speed: Float, // speed in cruch mode
+    /// speed in walk mode
+    pub speed: Float,
 
-    pub crouch_height: Float, // growth while sitting
-    pub height: Float, // growth in normal condition
+    /// speed in run mode
+    pub run_speed: Float,
 
-    // tnua's data
+    /// speed in crouch mode
+    pub crouch_speed: Float,
+
+    /// growth while sitting
+    pub crouch_height: Float, 
+
+    /// growth in normal condition
+    pub height: Float, 
+
+    /// tnua's walk data
     pub walk: TnuaBuiltinWalk,
-    pub jump: TnuaBuiltinJump,
 
-    // other data
-    pub actions_in_air: usize,
+    /// tnua's jump data
+    pub jump: TnuaBuiltinJump,
 }
 
 // constants for character control
 struct MoveKeys { forward: KeyCode, back: KeyCode, left: KeyCode, right: KeyCode, jump: KeyCode }
+
 const CROUCH_KEYS: [KeyCode; 2] = [KeyCode::ControlLeft, KeyCode::ControlRight];
 const RUN_KEYS: [KeyCode; 2] = [KeyCode::ShiftLeft, KeyCode::ShiftRight];
 const MOVE_KEYS: MoveKeys = MoveKeys {
@@ -74,19 +75,19 @@ const MOVE_KEYS: MoveKeys = MoveKeys {
     jump: KeyCode::Space
 };
 
-/// exercising character control
-pub(crate) fn apply_platformer_controls(
+/// Exercising character control
+pub fn apply_platformer_controls(
    keyboard: Res<ButtonInput<KeyCode>>,
    mut query: Query<(
        &CharacterMotionConfig,
        &mut TnuaController,
        &mut TnuaSimpleAirActionsCounter,
-       &Player
+       &PlayerComponent
    )>
 ) {
     for (
         config, mut controller,
-        mut air_actions_counter, player_data
+        mut air_actions_counter, player_component
     ) in query.iter_mut() {
         let mut direction = Vector3::ZERO;
 
@@ -110,7 +111,7 @@ pub(crate) fn apply_platformer_controls(
         // calculate direction
         direction = direction.clamp_length_max(1.0);
         direction = bevy::prelude::Transform::default()
-                .looking_to(player_data.forward.f32(), Vec3::Y)
+                .looking_to(player_component.forward.f32(), Vec3::Y)
                 .transform_point(direction.f32())
                 .adjust_precision();
 
@@ -151,7 +152,7 @@ pub(crate) fn apply_platformer_controls(
             float_height: height,
 
             // With shooters, we want the character model to follow the camera.
-            desired_forward: Dir3::new(player_data.forward.f32()).ok(),
+            desired_forward: Dir3::new(player_component.forward.f32()).ok(),
             ..config.walk.clone()
         });
 
@@ -174,7 +175,7 @@ pub(crate) fn apply_platformer_controls(
                 // (maintaining the jump) and 2 for any other action. Of course, if the player
                 // releases the button and presses it again it'll return 2.
                 allow_in_air:
-                    air_actions_counter.air_count_for(TnuaBuiltinJump::NAME) <= config.actions_in_air,
+                    air_actions_counter.air_count_for(TnuaBuiltinJump::NAME) <= 0,
                 ..config.jump.clone()
             });
         }
