@@ -2,26 +2,19 @@
 //! a all game logis of this game
 
 // import crates
-use bevy::prelude::*;
-use avian3d::prelude::*;
+use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*};
+use bevy_rapier3d::prelude::*;
 
 // import crates if dev build
 #[cfg(debug_assertions)]
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
-
 // add modules
-pub(crate) mod player;
-pub(crate) mod systems;
-pub(crate) mod camera;
 pub(crate) mod components;
-
-
-// import this crate
-use crate::systems::setup;
-use crate::player::player_systems;
-use crate::player::character_controller::CharacterControllerPlugin;
-use crate::camera::camera_systems as cam_systems;
+pub(crate) mod systems;
+pub(crate) mod player;
+pub(crate) mod camera;
+pub(crate) mod ui;
 
 /// A main game logic plugin, this plugin
 /// add all systems of game
@@ -32,24 +25,19 @@ impl Plugin for GamePlugin {
         // add dev plugins
         if cfg!(debug_assertions) {
             app.add_plugins(WorldInspectorPlugin::new());
-            // app.add_plugins(PhysicsDebugPlugin::new(FixedUpdate));
+            // app.add_plugins(RapierDebugRenderPlugin::default());
         }
 
         // add plugins
-        app.add_plugins(PhysicsPlugins::new(FixedUpdate));        
-        app.add_plugins(CharacterControllerPlugin);
-
-        // add resources
-
-        // add events
+        app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default());
+        app.add_plugins(player::PlayerPlugin);
+        app.add_plugins(FrameTimeDiagnosticsPlugin);
 
         // add systems
-        app.add_systems(Startup, crate::setup);
-        app.add_systems(Update,
-            cam_systems::update_with_plr.before(player_systems::apply_mouse_controls)
-        );
-
-        app.add_systems(Update, player_systems::update_fear);
+        app.add_systems(Startup, (
+            systems::setup_world, ui::setup_gui
+        ));
+        app.add_systems(Update, ui::update_gui_text);
     }
 }
 

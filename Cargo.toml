@@ -6,10 +6,7 @@ edition = "2021"
 [dependencies]
 # engine tools
 bevy = { version = "0.15.3", features = ["dynamic_linking"] }
-# bevy_rapier3d = { version = "0.29", features = ["simd-stable", "debug-render-3d"] }
-avian3d = "0.2.1"
-bevy-tnua-avian3d = "0.3.0"
-bevy-tnua = "0.22"
+bevy_rapier3d = { version = "0.29", features = ["simd-stable", "debug-render-3d"] }
 
 # increase in QOL
 educe = "0.6.0"
