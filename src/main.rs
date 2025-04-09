@@ -13,6 +13,8 @@ fn main() -> AppExit {
             primary_window: Some(Window {
                 title: "The nightmarish forest".into(),
             })
+        }).set(AssetPlugin {
+            watch_for_changes_override: Some(true),
         }),
     );
 

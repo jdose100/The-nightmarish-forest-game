@@ -1,6 +1,6 @@
 //! UI - this a module for GUI systems
 use bevy::{color::palettes::css::GOLD, diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin}, prelude::*};
-use crate::player::structures::PlayerComponent;
+use crate::player::structures::{PlayerComponent, PlayerControllerData};
 
 #[derive(Component)] /// label of fps text
 pub struct FpsText;
@@ -19,7 +19,7 @@ pub fn setup_gui(
         Text::new("FPS: "),
         Node {
             position_type: PositionType::Absolute,
-            bottom: Val::Px(50.0),
+            bottom: Val::Px(100.0),
             left: Val::Px(10.0),
             ..default()
         },
@@ -40,7 +40,7 @@ pub fn setup_gui(
 
 pub fn update_gui_text(
     diagnostics: Res<DiagnosticsStore>,
-    player_data_query: Query<&PlayerComponent>,
+    player_data_query: Query<(&PlayerComponent, &PlayerControllerData)>,
     mut fps_text_query: Query<&mut TextSpan, (With<FpsText>, Without<PlayerDataText>)>,
     mut player_text_query: Query<&mut TextSpan, (With<PlayerDataText>, Without<FpsText>)>
 ) {
@@ -55,7 +55,7 @@ pub fn update_gui_text(
     }
 
     for mut span in &mut player_text_query {
-        **span = format!("{:?}", player_data);
+        **span = format!("{:?}\n{:?}", player_data.1, player_data.0);
     }
 }
 

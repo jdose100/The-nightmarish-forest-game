@@ -9,7 +9,7 @@ use bevy_rapier3d::prelude::*;
 use crate::components::SphereOfTear;
 
 /// Setup system for bevy
-#[autodefault(except(CameraComponent))]
+#[autodefault]
 pub fn setup_world(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -18,7 +18,6 @@ pub fn setup_world(
 ) {
     // spawn a 3d camera
     // commands.spawn((
-    //     CameraComponent {},
     //     Camera3d::default(),
     //     Projection::from(PerspectiveProjection { fov: 90.0_f32.to_radians() }),
     //     Transform::from_xyz(-4.0, 5.5, 12.0)

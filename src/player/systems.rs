@@ -3,8 +3,8 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 // import crates
 use bevy::{input::mouse::AccumulatedMouseMotion, prelude::*, window::{CursorGrabMode, PrimaryWindow}};
-use autodefault::autodefault;
 use bevy_rapier3d::{na::wrap, prelude::*};
+use autodefault::autodefault;
 
 // import data from this crate
 use crate::components::SphereOfTear;
@@ -16,7 +16,7 @@ pub fn setup(
     mut commands: Commands,
     // mut meshes: ResMut<Assets<Mesh>>,
     // mut materials: ResMut<Assets<StandardMaterial>>,
-    have_player: Query<Option<&PlayerComponent>>
+    have_player: Query<Option<&PlayerComponent>>,
 ) {
     // if the player already exists, then exit
     if let Ok(_) = have_player.get_single() {
@@ -30,17 +30,20 @@ pub fn setup(
         InheritedVisibility::HIDDEN,
         PlayerComponent::default(),
 
+        // Mesh3d(meshes.add(Cylinder::new(PLAYER_RADIUS, PLAYER_HEIGHT))),
+        // MeshMaterial3d(materials.add(StandardMaterial::default())),
+
         RigidBody::KinematicVelocityBased, // physics data
         Collider::cylinder(PLAYER_HEIGHT, PLAYER_RADIUS),
-
-        // MeshMaterial3d(materials.add(Color::srgb(0.5, 0.1, 0.9))), // mesh data
-        // Mesh3d(meshes.add(Cylinder::new(1.25, 2.25))),
     )).with_children(|parent| {
             parent.spawn(( // add player's camera
                 Projection::from(PerspectiveProjection { fov: 90.0_f32.to_radians() }),
-                Transform::from_xyz(0.0, 0.0, 0.0),
+                Transform::from_translation(CAMERA_WALK_TRANSLATION),
                 PlayerCameraPivot {},
                 Camera3d::default(),
+
+                // Mesh3d(meshes.add(Cuboid::default())),
+                // MeshMaterial3d(materials.add(StandardMaterial::default())),
             ));
         });
 }
@@ -78,17 +81,6 @@ pub fn update_input(
     input.jump = keys.pressed(KeyCode::Space) && !input.crouch;
 }
 
-/// update player's rotation
-pub fn update_rotation(
-    mut model_query: Query<&mut Transform, (With<PlayerComponent>, Without<PlayerCameraPivot>)>,
-    player_query: Query<&PlayerControllerData>,
-) {
-    let Ok(mut model_transform) = model_query.get_single_mut() else { return };
-    let Ok(plr_controller) = player_query.get_single() else { return };
-
-    model_transform.rotation = Quat::from_euler(EulerRot::XYZ, 0.0, plr_controller.rotation.y, 0.0);
-}
-
 /// set visible cursor
 pub fn update_cursor_visible(
     mut input_enabled: ResMut<PlayerInputEnabled>,
@@ -111,6 +103,7 @@ pub fn update_cursor_visible(
     }
 }
 
+
 /// update player's stamina
 pub fn update_stamina(
     mut player_query: Query<(&mut PlayerComponent, &PlayerControllerData)>,
@@ -131,16 +124,16 @@ pub fn update_stamina(
         return;
     }
 
-    if input.run {
+    if input.run && (input.backward || input.forward || input.right || input.left) {
         // if stamina > 0.0 and player can run
         // decrase stamina rate
-        if player_data.stamina > 0.0 && !player_data.stop_run {
+        if player_data.stamina >= 0.0 && !player_data.stop_run {
             player_data.stamina -= STAMINA_DECRASE_RATE;
         }
 
         // if stamina < 0.0 and player "stop_run" flag not set:
         // set stop_run = true (player can't run)
-        if player_data.stamina < 0.0 && !player_data.stop_run {
+        if player_data.stamina <= 0.0 && !player_data.stop_run {
             player_data.stop_run = true;
         }
     } else if player_data.stamina < MAX_STAMINA {
@@ -148,7 +141,7 @@ pub fn update_stamina(
 
         // if stop_run set and stamine > (value) and player can't run
         // set stop_run = false (player can run)
-        if player_data.stamina > MIN_STAMINA_TO_UNBLOCK_RUN && player_data.stop_run {
+        if player_data.stamina >= MIN_STAMINA_TO_UNBLOCK_RUN && player_data.stop_run {
             player_data.stop_run = false;
         }
     }
@@ -156,21 +149,44 @@ pub fn update_stamina(
 
 /// updates player fear points
 pub fn update_fear(
-    player: Single<(&Transform, &mut PlayerComponent)>,
+    mut player_query: Query<(&Transform, &mut PlayerComponent)>,
     spheres_query: Query<Option<(&Transform, &SphereOfTear)>>
 ) {
-    let mut player = player.into_inner();
+    // get data
+    let (player_transform, mut player) = match player_query.get_single_mut() {
+        Ok(data) => data,
+        Err(_) => return,
+    };
 
+    // player in sphere decrase fear points
+    let mut in_sphere = false;
     for sphere in spheres_query.iter() {
         if let Some(sphere) = sphere {
-            if sphere.1.point_in_sphere(&sphere.0.translation, &player.0.translation) {
-                player.1.fear += 0.1;
+            if sphere.1.point_in_sphere(&sphere.0.translation, &player_transform.translation) {
+                in_sphere = true;
+                player.fear += FEAR_DECRASE_RATE;
             }
         }
     }
+
+    // if player not in sphere and fear is not minimal
+    // recovery fear points
+    if !in_sphere && player.fear > 0.1 {
+        player.fear -= FEAR_RECOVERY_SPEED;
+    }
 }
 
- 
+/// update player's rotation
+pub fn update_rotation(
+    mut model_query: Query<&mut Transform, (With<PlayerComponent>, Without<PlayerCameraPivot>)>,
+    player_query: Query<&PlayerControllerData>,
+) {
+    let Ok(mut model_transform) = model_query.get_single_mut() else { return };
+    let Ok(plr_controller) = player_query.get_single() else { return };
+
+    model_transform.rotation = Quat::from_euler(EulerRot::XYZ, 0.0, plr_controller.rotation.y, 0.0);
+}
+
 /// move player's kinematic character
 pub fn move_character(
     mut player_query: Query<(Entity, &Collider, &mut Transform, &mut PlayerControllerData)>,
@@ -178,6 +194,7 @@ pub fn move_character(
     mut rapier_context: Query<(
         &mut RapierContextSimulation, &RapierContextColliders, &RapierQueryPipeline, &mut RapierRigidBodySet
     )>,        
+    mut last_crouch: Local<bool>,
     mouse_accumulated_motion: Res<AccumulatedMouseMotion>,
     input_enabled: Res<PlayerInputEnabled>,
     input: Res<PlayersInput>,
@@ -199,6 +216,57 @@ pub fn move_character(
         player_entity, player_collider,
         mut player_transform, mut player_controller
     ) = player_query.single_mut();
+
+    let crouch: bool;
+    if *last_crouch || input.crouch {
+        // If there is something above the player and player crouched, then
+        // player can't stop crouch
+        let mut casts = false;
+        let ray_cast_context = (rapier_context.1, rapier_context.2, &rapier_context.3);
+
+        /*
+            This cycle check a points and if there is somethins above the player,
+            then player can't stop crouch. This is a picture of ray cast, where
+            "#" is a player contour, "*" is a ray cast and "@" is a center
+                     ####*#####   
+                   ##         ##
+                  ##           ##
+                 ##             ##
+                *##      *       #*
+                 ##             ##
+                  ##           ##
+                   ##         ##
+                    #####*#####
+        */
+
+        for i in 0..5 {
+            let mut x_coord: f32 = 0.0;
+            let mut z_coord: f32 = 0.0;
+
+            if i == 1 {
+                x_coord = PLAYER_RADIUS;
+            } else if i == 2 {
+                x_coord = -PLAYER_RADIUS;
+            } else if i == 3 {
+                z_coord = PLAYER_RADIUS;
+            } else if i == 4 {
+                z_coord = -PLAYER_RADIUS;
+            }
+
+            if let Some(_) = crouch_ray_cast(
+                ray_cast_context, player_entity,
+                &player_transform.translation, x_coord, z_coord
+            ) {
+                casts = true;
+                break;
+            }
+        }
+
+        // set player crouch at the moment
+        crouch = input.crouch || casts;
+    } else {
+        crouch = false;
+    }
 
     // get mouse delta
     let mouse_delta;
@@ -223,8 +291,9 @@ pub fn move_character(
     // get player's speed
     let mut normalized_move = Vec3::ZERO;
 
+    // get player speed
     let player_speed: f32;
-    if input.crouch {
+    if crouch {
         player_speed = CROUCH_SPEED;
     } else if input.run {
         player_speed = RUN_SPEED;
@@ -241,7 +310,6 @@ pub fn move_character(
     if input.right { sideways += 1.0 }
     if input.left { sideways -= 1.0 }
 
-    // calculate directional move values
     let x_fac = player_controller.rotation.y.cos();
     let z_fac = player_controller.rotation.y.sin();
 
@@ -268,10 +336,9 @@ pub fn move_character(
         }
     }
 
+    // add on acceleration * dt
     let dt = time.delta().as_secs_f32();
     let velocity_change = player_controller.acceleration * dt;
-
-    // add on acceleration * dt
     player_controller.velocity += velocity_change;
 
     // clamp y-speed to terminal velocity values
@@ -279,24 +346,33 @@ pub fn move_character(
         -player_controller.terminal_velocity, player_controller.terminal_velocity
     );
 
-    // add velocity to move
+    // add velocity to move and apply delta time to queued move
     normalized_move += player_controller.velocity;
-
-    // apply delta time to queued move
     normalized_move *= dt;
 
-    // we only want auto-stepping/ground-snapping (ramps) if the player is grounded
+    // we only want auto-stepping if the player is grounded
     let step: Option<CharacterAutostep>;
     if player_controller.grounded {
-        step = Some(
-            CharacterAutostep {
-                max_height: CharacterLength::Absolute(1.65),
-                min_width: CharacterLength::Absolute(0.1),
-                include_dynamic_bodies: true
+        step = Some(CharacterAutostep {
+            max_height: CharacterLength::Absolute(1.65),
+            min_width: CharacterLength::Absolute(0.1),
+            include_dynamic_bodies: true
         });
     } else {
         step = None;
     };
+
+    // update rotation for crouch
+    let rotation: Quat;
+    if crouch {
+        let needs_rotation =
+            Quat::from_rotation_x(player_controller.rotation.y) * Quat::from_rotation_x(90_f32.to_radians());
+        rotation = Quat::from_rotation_z(90.0_f32.to_radians()) * needs_rotation;
+    } else {
+        rotation = Quat::IDENTITY;
+    }
+
+    // player_transform.rotation = rotation;
 
     // start move player shape
     let move_output = rapier_context.0.move_shape(
@@ -304,7 +380,7 @@ pub fn move_character(
         normalized_move,
         player_collider,
         player_transform.translation,
-        Quat::IDENTITY,
+        rotation,
         player_controller.mass,
         &MoveShapeOptions {
             autostep: step,
@@ -319,19 +395,52 @@ pub fn move_character(
         rapier_context.1, &mut *rapier_context.3,
         player_transform.translation + Vec3::new(0.0, -PLAYER_HEIGHT, 0.0),
         Quat::IDENTITY,
-        &Collider::cylinder(0.05, 1.24),
+        &Collider::cylinder(0.05, PLAYER_RADIUS - 0.1),
         QueryFilter::new().exclude_collider(player_entity)
     ) {
-        if player_controller.velocity.y <= 0.0 {
-            player_controller.grounded = true;
-        } else {
-            player_controller.grounded = false;
-        }
+        player_controller.grounded = player_controller.velocity.y <= 0.0;
     } else {
         player_controller.grounded = false;
     }
 
     // update player position
     player_transform.translation += move_output.effective_translation;
+
+    // If player crouched in last frame and end crouch in this frame player need
+    // to up, because if you don't do this player will get stuck
+    if *last_crouch && !crouch {
+        player_transform.translation += Vec3::new(0.0, PLAYER_HEIGHT - PLAYER_RADIUS, 0.0);
+    }
+
+    // update crouch state
+    *last_crouch = input.crouch;
+ 
+    // update cam translation
+    if crouch {
+        pivot_transform.translation = CAMERA_CROUCH_TRANSLATION;
+    } else {
+        pivot_transform.translation = CAMERA_WALK_TRANSLATION;
+    }   *last_crouch = crouch;
+}
+
+// helper functions
+
+/// Ray cast for detect something above the player.
+/// While he crouch.
+#[inline] fn crouch_ray_cast(
+     rapier_context: (&RapierContextColliders, &RapierQueryPipeline, &Mut<RapierRigidBodySet>),
+     player_entity: Entity,
+     translation: &Vec3,
+     x_coord: f32,
+     z_coord: f32
+) -> Option<(Entity, f32)> {
+    rapier_context.1.cast_ray(
+        rapier_context.0, &*rapier_context.2,
+        translation.clone(),
+        Vec3::new(x_coord, 1.0, z_coord),
+        PLAYER_HEIGHT * 1.2,
+        true,
+        QueryFilter::new().exclude_collider(player_entity)
+    )
 }
    

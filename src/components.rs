@@ -4,8 +4,8 @@ use bevy::prelude::*;
 
 /// Sphere of tear - this is the component that determines
 /// in what radius the player receives fear.
-#[derive(Component, Clone, Copy)]
-#[require(Transform)]
+#[derive(Component, Clone, Copy, Reflect)]
+#[reflect(Component)] #[require(Transform)]
 pub struct SphereOfTear(pub f32);
 
 impl SphereOfTear {

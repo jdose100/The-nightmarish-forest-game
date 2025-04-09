@@ -3,6 +3,7 @@
 
 // import crates
 use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*};
+use bevy_skein::SkeinPlugin;
 use bevy_rapier3d::prelude::*;
 
 // import crates if dev build
@@ -29,14 +30,21 @@ impl Plugin for GamePlugin {
         }
 
         // add plugins
-        app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default());
-        app.add_plugins(player::PlayerPlugin);
-        app.add_plugins(FrameTimeDiagnosticsPlugin);
+        app.add_plugins((
+            RapierPhysicsPlugin::<NoUserData>::default(),
+            FrameTimeDiagnosticsPlugin,
+            player::PlayerPlugin,
+            SkeinPlugin::default(),
+        ));
+
+        // register types
+        app.register_type::<components::SphereOfTear>();
 
         // add systems
         app.add_systems(Startup, (
             systems::setup_world, ui::setup_gui
         ));
+
         app.add_systems(Update, ui::update_gui_text);
     }
 }
