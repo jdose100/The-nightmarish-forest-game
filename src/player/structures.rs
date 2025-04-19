@@ -11,7 +11,7 @@ pub(super) const PLAYER_RADIUS: f32 = 1.0;
 pub(super) const MIN_STAMINA_TO_UNBLOCK_RUN: f32 = 52.0;
 pub(super) const STAMINA_RECOVERY_SPEED: f32 = 0.3;
 pub(super) const STAMINA_DECRASE_RATE: f32 = 0.7;
-pub(super) const MAX_STAMINA: f32 = 250.0;
+pub(super) const MAX_STAMINA: f32 = 250.0 * 10000.0;
 
 // player speed
 pub(super) const CROUCH_SPEED: f32 = 0.7;
@@ -67,6 +67,9 @@ pub struct PlayersInput {
 pub struct PlayerControllerData {
     #[educe(Default = 7.0)] /// player's jump force
     pub jump_force: f32,
+
+    #[educe(Default = false)] /// player's crouch in the last frame
+    pub crouched: bool,
 
     // physics data
     #[educe(Default = Vec3::ZERO)] /// player's acceleration

@@ -35,17 +35,20 @@ impl Plugin for GamePlugin {
             FrameTimeDiagnosticsPlugin,
             player::PlayerPlugin,
             SkeinPlugin::default(),
+            MeshPickingPlugin,
         ));
 
         // register types
         app.register_type::<components::SphereOfTear>();
+
+        // add resources
 
         // add systems
         app.add_systems(Startup, (
             systems::setup_world, ui::setup_gui
         ));
 
-        app.add_systems(Update, ui::update_gui_text);
+        app.add_systems(Update, (ui::update_gui_text, systems::in_inventory));
     }
 }
 

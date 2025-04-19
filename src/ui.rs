@@ -10,7 +10,7 @@ pub struct PlayerDataText;
 
 /// setup gui interface
 pub fn setup_gui(
-    mut commands: Commands
+    mut commands: Commands,
 ) {
     // add fps text
     commands.spawn((
@@ -33,11 +33,34 @@ pub fn setup_gui(
             position_type: PositionType::Absolute,
             bottom: Val::Px(15.0),
             left: Val::Px(5.0),
-            ..default()
+            ..Default::default()
         }
     )).with_child((TextSpan::default(), PlayerDataText));
+
+    // add center point
+    commands
+        .spawn(Node {
+            width: Val::Percent(100.),
+            height: Val::Percent(100.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            flex_direction: FlexDirection::Column,
+            ..Default::default()
+        })
+        .insert(PickingBehavior::IGNORE)
+        .with_children(|parent| {
+            parent.spawn(Node {
+                    width: Val::Px(8.0),
+                    height: Val::Px(8.0),
+                    margin: UiRect::bottom(Val::Px(4.0)),
+                    ..Default::default()
+                }
+            ).insert(BackgroundColor(Color::srgb(235.0, 35.0, 12.0)));
+        }
+    );
 }
 
+/// update text for debug
 pub fn update_gui_text(
     diagnostics: Res<DiagnosticsStore>,
     player_data_query: Query<(&PlayerComponent, &PlayerControllerData)>,

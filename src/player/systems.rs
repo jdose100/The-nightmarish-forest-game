@@ -25,7 +25,8 @@ pub fn setup(
 
     // setup player
     commands.spawn((
-        Transform::from_xyz(0.0, 3.0, 0.0), // general data
+        #[cfg(debug_assertions)] Name::new("Player"),
+        Transform::from_xyz(0.0, 6.0, 0.0), // general data
         PlayerControllerData::default(),
         InheritedVisibility::HIDDEN,
         PlayerComponent::default(),
@@ -89,8 +90,8 @@ pub fn update_cursor_visible(
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     for mut window in window_query.iter_mut() {
-        if buttons.just_pressed(MouseButton::Left) {
-            window.cursor_options.grab_mode = CursorGrabMode::Locked;
+        if buttons.just_pressed(MouseButton::Right) {
+            window.cursor_options.grab_mode = CursorGrabMode::Confined;
             window.cursor_options.visible = false;
             input_enabled.0 = true;
         }
@@ -100,6 +101,21 @@ pub fn update_cursor_visible(
             window.cursor_options.visible = true;
             input_enabled.0 = false;
         }
+    }
+}
+
+/// set cursor position = window_size / 2.0
+pub fn update_cursor_position(
+    mut window_query: Query<&mut Window, With<PrimaryWindow>>,
+    input_enabled: ResMut<PlayerInputEnabled>,
+) {
+    if !input_enabled.0 {
+        return;
+    }
+
+    for mut window in window_query.iter_mut() {
+        let position = (window.size() / 2.0) + 2.0;
+        window.set_cursor_position(Some(position));
     }
 }
 
@@ -124,7 +140,7 @@ pub fn update_stamina(
         return;
     }
 
-    if input.run && (input.backward || input.forward || input.right || input.left) {
+    if input.run && (input.backward || input.forward || input.right || input.left) && !player_controller.crouched {
         // if stamina > 0.0 and player can run
         // decrase stamina rate
         if player_data.stamina >= 0.0 && !player_data.stop_run {
@@ -194,7 +210,6 @@ pub fn move_character(
     mut rapier_context: Query<(
         &mut RapierContextSimulation, &RapierContextColliders, &RapierQueryPipeline, &mut RapierRigidBodySet
     )>,        
-    mut last_crouch: Local<bool>,
     mouse_accumulated_motion: Res<AccumulatedMouseMotion>,
     input_enabled: Res<PlayerInputEnabled>,
     input: Res<PlayersInput>,
@@ -218,7 +233,7 @@ pub fn move_character(
     ) = player_query.single_mut();
 
     let crouch: bool;
-    if *last_crouch || input.crouch {
+    if player_controller.crouched || input.crouch {
         // If there is something above the player and player crouched, then
         // player can't stop crouch
         let mut casts = false;
@@ -355,8 +370,8 @@ pub fn move_character(
     if player_controller.grounded {
         step = Some(CharacterAutostep {
             max_height: CharacterLength::Absolute(1.65),
-            min_width: CharacterLength::Absolute(0.1),
-            include_dynamic_bodies: true
+            min_width: CharacterLength::Absolute(0.5),
+            include_dynamic_bodies: true,
         });
     } else {
         step = None;
@@ -372,8 +387,6 @@ pub fn move_character(
         rotation = Quat::IDENTITY;
     }
 
-    // player_transform.rotation = rotation;
-
     // start move player shape
     let move_output = rapier_context.0.move_shape(
         rapier_context.1, rapier_context.2, &mut *rapier_context.3,
@@ -385,6 +398,8 @@ pub fn move_character(
         &MoveShapeOptions {
             autostep: step,
             slide: true,
+            min_slope_slide_angle: 30.0_f32.to_radians(),
+            max_slope_climb_angle: 45.0_f32.to_radians(),
             ..default()
         },
         QueryFilter::new().exclude_collider(player_entity), |_| {}
@@ -395,7 +410,7 @@ pub fn move_character(
         rapier_context.1, &mut *rapier_context.3,
         player_transform.translation + Vec3::new(0.0, -PLAYER_HEIGHT, 0.0),
         Quat::IDENTITY,
-        &Collider::cylinder(0.05, PLAYER_RADIUS - 0.1),
+        &Collider::cylinder(0.35, PLAYER_RADIUS - 0.1),
         QueryFilter::new().exclude_collider(player_entity)
     ) {
         player_controller.grounded = player_controller.velocity.y <= 0.0;
@@ -408,19 +423,19 @@ pub fn move_character(
 
     // If player crouched in last frame and end crouch in this frame player need
     // to up, because if you don't do this player will get stuck
-    if *last_crouch && !crouch {
+    if player_controller.crouched && !crouch {
         player_transform.translation += Vec3::new(0.0, PLAYER_HEIGHT - PLAYER_RADIUS, 0.0);
     }
 
     // update crouch state
-    *last_crouch = input.crouch;
+    player_controller.crouched = input.crouch;
  
     // update cam translation
     if crouch {
         pivot_transform.translation = CAMERA_CROUCH_TRANSLATION;
     } else {
         pivot_transform.translation = CAMERA_WALK_TRANSLATION;
-    }   *last_crouch = crouch;
+    }   player_controller.crouched = crouch;
 }
 
 // helper functions

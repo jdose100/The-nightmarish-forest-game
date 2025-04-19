@@ -5,7 +5,8 @@ use bevy::prelude::*;
 /// Sphere of tear - this is the component that determines
 /// in what radius the player receives fear.
 #[derive(Component, Clone, Copy, Reflect)]
-#[reflect(Component)] #[require(Transform)]
+#[reflect(Component)]
+#[require(Transform)]
 pub struct SphereOfTear(pub f32);
 
 impl SphereOfTear {
@@ -19,4 +20,11 @@ impl SphereOfTear {
         value <= self.0
     }
 }
+
+/// Marker that objects in Inventory
+#[derive(Component)]
+pub struct InInventory;
+
+#[derive(Component)]
+pub struct CanPickable;
 

@@ -18,7 +18,7 @@ impl Plugin for PlayerPlugin {
         app.add_systems(Update, (
            systems::update_input, systems::update_cursor_visible, systems::update_fear,
            systems::update_stamina,
-           (systems::move_character, systems::update_rotation).chain() 
+           (systems::move_character, systems::update_rotation, systems::update_cursor_position).chain() 
         ));
     }
 }
